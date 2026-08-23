@@ -1,166 +1,235 @@
 package com.example.mfak
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.mfak.api.AuthCode
-import com.example.mfak.api.RetrofitInstance
+import com.example.mfak.model.Account
+import com.example.mfak.repository.AccountRepository
+import com.example.mfak.security.BiometricPromptManager
 import com.example.mfak.ui.theme.MFAKTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.UUID
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
+    private val biometricPromptManager by lazy {
+        BiometricPromptManager(this)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MFAKTheme {
-                AuthScreen()
+                var isUnlocked by remember { mutableStateOf(false) }
+
+                if (!isUnlocked) {
+                    LockScreen(onUnlocked = { isUnlocked = true })
+                } else {
+                    MainAppContent()
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun LockScreen(onUnlocked: () -> Unit) {
+        val context = LocalContext.current
+        LaunchedEffect(Unit) {
+            biometricPromptManager.showBiometricPrompt(
+                title = "Desbloquear MFAK",
+                subtitle = "Use seu PIN ou Biometria",
+                onSuccess = { onUnlocked() },
+                onError = { code, err ->
+                    Toast.makeText(context, "Erro: $err", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("App Bloqueado", style = MaterialTheme.typography.headlineMedium)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = {
+                    biometricPromptManager.showBiometricPrompt(
+                        title = "Desbloquear MFAK",
+                        subtitle = "Use seu PIN ou Biometria",
+                        onSuccess = { onUnlocked() },
+                        onError = { _, _ -> }
+                    )
+                }) {
+                    Text("Tentar Novamente")
+                }
             }
         }
     }
 }
 
-class AuthViewModel : ViewModel() {
-    var codes by mutableStateOf<List<AuthCode>>(emptyList())
-        private set
-    
-    var isLoading by mutableStateOf(false)
-        private set
-
-    var errorMessage by mutableStateOf<String?>(null)
+class MainViewModel(private val repository: AccountRepository) : ViewModel() {
+    var accounts by mutableStateOf<List<Account>>(emptyList())
         private set
 
     init {
-        fetchCodes()
+        loadAccounts()
     }
 
-    fun fetchCodes() {
-        viewModelScope.launch {
-            isLoading = true
-            errorMessage = null
-            try {
-                // Em um cenário real, você usaria:
-                // codes = RetrofitInstance.api.getAuthCodes()
-                
-                // Simulação de chamada de API para o protótipo
-                delay(1500) 
-                codes = listOf(
-                    AuthCode(1, "Google", "482 910", "usuario@gmail.com"),
-                    AuthCode(2, "GitHub", "129 304", "dev@github.com"),
-                    AuthCode(3, "Amazon", "992 112", "compras@amazon.com.br"),
-                    AuthCode(4, "Microsoft", "002 931", "trabalho@outlook.com"),
-                    AuthCode(5, "Facebook", "554 221", "social@me.com")
-                )
-            } catch (e: Exception) {
-                errorMessage = "Erro ao carregar códigos: ${e.message}"
-            } finally {
-                isLoading = false
-            }
-        }
+    fun loadAccounts() {
+        accounts = repository.getAccounts()
+    }
+
+    fun addAccount(name: String, email: String, key: String) {
+        val newAccount = Account(
+            id = UUID.randomUUID().toString(),
+            serviceName = name,
+            email = email,
+            secretKey = key
+        )
+        repository.addAccount(newAccount)
+        loadAccounts()
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AuthScreen(viewModel: AuthViewModel = viewModel()) {
+fun MainAppContent() {
+    val context = LocalContext.current
+    val repository = remember { AccountRepository(context) }
+    val viewModel: MainViewModel = viewModel(factory = object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            return MainViewModel(repository) as T
+        }
+    })
+
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Autenticador Prototipo") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                title = { Text("MFAK - Suas Contas") },
+                actions = {
+                    IconButton(onClick = { viewModel.loadAccounts() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Recarregar")
+                    }
+                }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { viewModel.fetchCodes() }) {
-                Text("Refresh")
+            Column {
+                FloatingActionButton(
+                    onClick = { showScanner = true },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Escanear QR")
+                }
+                FloatingActionButton(onClick = { showAddDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Adicionar Manual")
+                }
             }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-            if (viewModel.isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            } else if (viewModel.errorMessage != null) {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(text = viewModel.errorMessage!!, color = MaterialTheme.colorScheme.error)
-                    Button(onClick = { viewModel.fetchCodes() }) {
-                        Text("Tentar Novamente")
-                    }
-                }
+            if (viewModel.accounts.isEmpty()) {
+                Text("Nenhuma conta adicionada", modifier = Modifier.align(Alignment.Center))
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(viewModel.codes) { authItem ->
-                        AuthCodeCard(authItem)
+                    items(viewModel.accounts) { account ->
+                        AccountCard(account)
                     }
                 }
             }
+        }
+
+        if (showAddDialog) {
+            AddAccountDialog(
+                onDismiss = { showAddDialog = false },
+                onConfirm = { name, email, key ->
+                    viewModel.addAccount(name, email, key)
+                    showAddDialog = false
+                }
+            )
+        }
+
+        if (showScanner) {
+            // Aqui entraria a implementação da CameraX para o QR Code
+            // Por brevidade no protótipo, simulamos o scanner
+            Toast.makeText(context, "Scanner de QR em breve...", Toast.LENGTH_SHORT).show()
+            showScanner = false
         }
     }
 }
 
 @Composable
-fun AuthCodeCard(authItem: AuthCode) {
+fun AccountCard(account: Account) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = authItem.serviceName,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = authItem.email,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
+            Text(account.serviceName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(account.email, style = MaterialTheme.typography.bodySmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            // Simulação de código TOTP (em real usaria uma lib como a zxing ou similar para gerar)
             Text(
-                text = authItem.code,
-                style = MaterialTheme.typography.displayMedium.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 4.sp
-                ),
+                text = "123 456", 
+                style = MaterialTheme.typography.displayMedium,
                 color = MaterialTheme.colorScheme.primary
-            )
-            // Barra de progresso para simular o tempo de expiração do código (30s)
-            LinearProgressIndicator(
-                progress = { 0.6f },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
         }
     }
+}
+
+@Composable
+fun AddAccountDialog(onDismiss: () -> Unit, onConfirm: (String, String, String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Adicionar Conta") },
+        text = {
+            Column {
+                TextField(value = name, onValueChange = { name = it }, label = { Text("Serviço (ex: Google)") })
+                TextField(value = email, onValueChange = { email = it }, label = { Text("E-mail") })
+                TextField(value = key, onValueChange = { key = it }, label = { Text("Chave Secreta") })
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(name, email, key) }) { Text("Adicionar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
 }

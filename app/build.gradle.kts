@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
+    implementation(libs.androidx.compose.material.icons.extended)
     
     implementation(libs.retrofit)
     implementation(libs.retrofit.serialization)
@@ -60,6 +61,7 @@ dependencies {
     // Security & Biometrics
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.appcompat)
 
     // QR & Camera
     implementation(libs.zxing.core)
